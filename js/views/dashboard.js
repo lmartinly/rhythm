@@ -38,16 +38,26 @@ export function render(root) {
     ]));
   }
 
-  for (const entry of entries) {
+  const ordered = [...entries].sort((a, b) => Number(a.done) - Number(b.done));
+  for (const entry of ordered) {
     let ref, sub = null;
     if (entry.type === 'cleaning') {
       const names = (entry.roomIds || []).map((id) => s.rooms[id]?.name).filter(Boolean);
       ref = { name: 'Home Cleaning', icon: ICONS.broom, category: 'home' };
       sub = names.length ? names.join(', ') : 'Pick rooms when you start';
+      const sess = entry.session || [];
+      const total = sess.reduce((n, r) => n + r.tasks.length, 0);
+      const ticked = sess.reduce((n, r) => n + r.tasks.filter((t) => t.done).length, 0);
+      if (total && !entry.done) sub += ` · ${ticked}/${total}`;
     } else {
       ref = entry.type === 'item' ? s.items[entry.refId] : s.routines[entry.refId];
       if (!ref) continue;
-      if (entry.type === 'routine') sub = `${ref.itemIds.length} item${ref.itemIds.length === 1 ? '' : 's'}`;
+      if (entry.type === 'routine') {
+        const total = ref.itemIds.length;
+        const ticked = (entry.checked || []).filter((id) => ref.itemIds.includes(id)).length;
+        sub = `${total} item${total === 1 ? '' : 's'}`;
+        if (ticked && !entry.done) sub += ` · ${ticked}/${total}`;
+      }
     }
 
     const trail = [];
@@ -142,7 +152,7 @@ export function render(root) {
     { name: 'Home Cleaning', icon: ICONS.broom },
     {
       category: 'home',
-      sub: 'Pick rooms, build a checklist',
+      sub: 'Pick rooms, add to today',
       trail: chev(),
       onclick: startCleaningFlow,
     }

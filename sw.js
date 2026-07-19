@@ -1,6 +1,6 @@
 // Rhythm · service worker (offline support, GitHub Pages friendly)
 
-const CACHE = 'rhythm-v4';
+const CACHE = 'rhythm-v6';
 
 const SHELL = [
   './',

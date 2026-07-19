@@ -51,7 +51,20 @@ export function openRoutineRun(routineId, { todayEntryId = null } = {}) {
   const r = store.state.routines[routineId];
   if (!r) return;
   const items = r.itemIds.map((id) => store.state.items[id]).filter(Boolean);
-  const checked = new Set(items.map((i) => i.id));
+
+  // From Today → tick as you go, progress persists on the entry.
+  // From My Routines / Library → quick log: everything pre-checked, uncheck skips.
+  const entry = todayEntryId
+    ? store.state.today.entries.find((e) => e.id === todayEntryId)
+    : null;
+  const tickMode = !!entry && !entry.done;
+  if (tickMode && !Array.isArray(entry.checked)) entry.checked = [];
+  const checked = tickMode
+    ? new Set(entry.checked.filter((id) => r.itemIds.includes(id)))
+    : new Set(items.map((i) => i.id));
+  const persist = () => {
+    if (tickMode) { entry.checked = [...checked]; store.save(); }
+  };
 
   const list = el('div');
   const doneBtn = el('button.btn.full', {}, 'Complete routine');
@@ -68,6 +81,7 @@ export function openRoutineRun(routineId, { todayEntryId = null } = {}) {
       const on = checked.has(item.id);
       const toggle = () => {
         if (checked.has(item.id)) checked.delete(item.id); else checked.add(item.id);
+        persist();
         renderList();
       };
       const row = itemRow(item, {
@@ -75,7 +89,8 @@ export function openRoutineRun(routineId, { todayEntryId = null } = {}) {
         trail: ringButton(on, toggle),
         onclick: toggle,
       });
-      if (!on) row.style.opacity = '0.55';
+      if (tickMode) { if (on) row.classList.add('done'); }
+      else if (!on) row.style.opacity = '0.55';
       list.append(row);
     }
     doneBtn.disabled = items.length === 0;
@@ -100,7 +115,10 @@ export function openRoutineRun(routineId, { todayEntryId = null } = {}) {
     title: sheetTitle(r.icon, r.name, r.category),
     headExtra: menuBtn,
     body: [
-      el('p.muted', { style: { margin: '0 2px 10px' } }, 'Uncheck anything you skipped this time.'),
+      el('p.muted', { style: { margin: '0 2px 10px' } },
+        tickMode
+          ? 'Tick as you go — close any time, your progress waits in Today.'
+          : 'Uncheck anything you skipped this time.'),
       el('div.card', { style: { padding: '8px 12px' } }, [list]),
     ],
     foot: doneBtn,
@@ -180,7 +198,7 @@ export function openAddToToday({ date = null } = {}) {
         { name: 'Home Cleaning', icon: ICONS.broom },
         {
           category: 'home',
-          sub: targetDk === today ? 'Pick rooms, start now' : `Pick rooms for ${planLabel(targetDk)}`,
+          sub: targetDk === today ? 'Pick rooms, add to today' : `Pick rooms for ${planLabel(targetDk)}`,
           trail: chev(),
           onclick: () => startCleaningFlow({ planDk: targetDk === today ? null : targetDk }),
         }
@@ -537,7 +555,9 @@ export function startCleaningFlow({ planDk = null, todayEntryId = null, preselec
   const picked = new Set(preselect || []);
   const list = el('div.card', { style: { padding: '6px 12px' } });
   const begin = el('button.btn.full', { disabled: true },
-    planDk ? `Plan for ${planLabel(planDk)}` : 'Build my checklist');
+    planDk ? `Plan for ${planLabel(planDk)}`
+      : todayEntryId ? 'Build my checklist'
+      : 'Add to Today');
   const planLater = planDk ? null : el('button.btn.quiet.full', {
     style: { marginTop: '10px' },
     onclick: async () => {
@@ -585,38 +605,40 @@ export function startCleaningFlow({ planDk = null, todayEntryId = null, preselec
       toast(`Home Cleaning · planned for ${planLabel(planDk)}`, ICONS.cal);
       return;
     }
-    // session copy — edits here never touch the templates
-    const session = [...picked].map((id) => {
-      const room = store.state.rooms[id];
-      return {
-        name: room.name, icon: room.icon,
-        tasks: room.tasks.map((name) => ({ name, done: false })),
-      };
-    });
-    setTimeout(() => openCleaningSession(session, { todayEntryId }), 340);
+    if (todayEntryId) {
+      // re-picking rooms for an existing Today entry
+      const entry = store.state.today.entries.find((e) => e.id === todayEntryId);
+      if (!entry) return;
+      entry.roomIds = [...picked];
+      entry.session = store.sessionFromRooms(entry.roomIds);
+      store.save();
+      setTimeout(() => openCleaningSession(entry.session, { todayEntryId }), 340);
+      return;
+    }
+    // the checklist lives in Today now — tick it off whenever you like
+    store.addCleaningToToday([...picked]);
+    toast('Home Cleaning · added to today', ICONS.plus);
   });
 }
 
-/** Start a session straight from a planned Today entry (rooms already chosen). */
+/** Open the checklist that lives inside a Today entry — progress persists. */
 export function startPlannedCleaning(entry) {
-  const roomIds = (entry.roomIds || []).filter((id) => store.state.rooms[id]);
-  if (!roomIds.length) {
-    startCleaningFlow({ todayEntryId: entry.id });
-    return;
+  if (!entry.session || !entry.session.length) {
+    const ids = (entry.roomIds || []).filter((id) => store.state.rooms[id]);
+    if (!ids.length) {
+      startCleaningFlow({ todayEntryId: entry.id });
+      return;
+    }
+    entry.session = store.sessionFromRooms(ids);
+    store.save();
   }
-  const session = roomIds.map((id) => {
-    const room = store.state.rooms[id];
-    return {
-      name: room.name, icon: room.icon,
-      tasks: room.tasks.map((name) => ({ name, done: false })),
-    };
-  });
-  openCleaningSession(session, { todayEntryId: entry.id });
+  openCleaningSession(entry.session, { todayEntryId: entry.id });
 }
 
 function openCleaningSession(sessionRooms, { todayEntryId = null } = {}) {
   const body = el('div');
   const finish = el('button.btn.full', {}, 'Finish session');
+  const persist = () => { if (todayEntryId) store.save(); };
 
   const render = () => {
     body.replaceChildren();
@@ -625,7 +647,7 @@ function openCleaningSession(sessionRooms, { todayEntryId = null } = {}) {
       const card = el('div.card', { style: { padding: '8px 14px' } });
       room.tasks.forEach((t, i) => {
         const row = el('button.row' + (t.done ? '.done' : ''), {
-          onclick: () => { t.done = !t.done; render(); },
+          onclick: () => { t.done = !t.done; persist(); render(); },
         }, [
           el('div.body', {}, [el('div.title', { style: { fontWeight: '450' } }, t.name)]),
           el('div.trail', {}, [
@@ -633,7 +655,7 @@ function openCleaningSession(sessionRooms, { todayEntryId = null } = {}) {
               t.done ? [icon(ICONS.check, { size: 15, sw: 2.4 })] : []),
             el('button.icon-btn', {
               'aria-label': `Remove ${t.name}`,
-              onclick: (e) => { e.stopPropagation(); room.tasks.splice(i, 1); render(); },
+              onclick: (e) => { e.stopPropagation(); room.tasks.splice(i, 1); persist(); render(); },
             }, [icon(ICONS.x, { size: 16 })]),
           ]),
         ]);
@@ -646,6 +668,7 @@ function openCleaningSession(sessionRooms, { todayEntryId = null } = {}) {
       add.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && add.value.trim()) {
           room.tasks.push({ name: add.value.trim(), done: false });
+          persist();
           render();
         }
       });
@@ -661,7 +684,10 @@ function openCleaningSession(sessionRooms, { todayEntryId = null } = {}) {
   const sheet = openSheet({
     title: 'Today we clean',
     body: [
-      el('p.muted', { style: { margin: '0 2px 4px' } }, 'Changes here are for this session only — your templates stay put.'),
+      el('p.muted', { style: { margin: '0 2px 4px' } },
+        todayEntryId
+          ? 'Tick as you go — close any time, your progress waits in Today.'
+          : 'Changes here are for this session only — your templates stay put.'),
       body,
     ],
     foot: finish,

@@ -129,10 +129,17 @@ export const store = {
     if (due.length) {
       for (const p of due) {
         if (p.type === 'cleaning') {
-          this.state.today.entries.push({ id: uid(), type: 'cleaning', roomIds: p.roomIds || [], done: false });
+          this.state.today.entries.push({
+            id: uid(), type: 'cleaning', roomIds: p.roomIds || [],
+            session: this.sessionFromRooms(p.roomIds || []), done: false,
+          });
         } else {
           const ref = p.type === 'item' ? this.state.items[p.refId] : this.state.routines[p.refId];
-          if (ref) this.state.today.entries.push({ id: uid(), type: p.type, refId: p.refId, done: false });
+          if (ref) {
+            const entry = { id: uid(), type: p.type, refId: p.refId, done: false };
+            if (p.type === 'routine') entry.checked = [];
+            this.state.today.entries.push(entry);
+          }
         }
       }
       this.state.planned = this.state.planned.filter((p) => p.dateKey > today);
@@ -145,7 +152,9 @@ export const store = {
     this.ensureToday();
     const entries = this.state.today.entries;
     if (entries.some((e) => e.type === type && e.refId === refId && !e.done)) return;
-    entries.push({ id: uid(), type, refId, done: false });
+    const entry = { id: uid(), type, refId, done: false };
+    if (type === 'routine') entry.checked = []; // ticked through the day
+    entries.push(entry);
     this.save();
   },
 
@@ -186,6 +195,28 @@ export const store = {
       if (e.cleaningId === id) { e.done = false; delete e.cleaningId; }
     }
     this.save();
+  },
+
+  /** Build a fresh, editable checklist from room templates. */
+  sessionFromRooms(roomIds) {
+    return (roomIds || [])
+      .filter((id) => this.state.rooms[id])
+      .map((id) => {
+        const room = this.state.rooms[id];
+        return { name: room.name, icon: room.icon, tasks: room.tasks.map((name) => ({ name, done: false })) };
+      });
+  },
+
+  /** The cleaning list lands in Today first — you tick it off through the day. */
+  addCleaningToToday(roomIds) {
+    this.ensureToday();
+    const entry = {
+      id: uid(), type: 'cleaning', roomIds,
+      session: this.sessionFromRooms(roomIds), done: false,
+    };
+    this.state.today.entries.push(entry);
+    this.save();
+    return entry;
   },
 
   /* ── planning ahead ── */
