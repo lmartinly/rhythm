@@ -1,8 +1,9 @@
 // Rhythm · Calendar
 
-import { el, icon, ICONS, dateKey, monthName, timeOf, CATEGORIES } from '../util.js';
+import { el, icon, ICONS, dateKey, monthName, timeOf, CATEGORIES, planLabel } from '../util.js';
 import { store } from '../store.js';
-import { itemRow, openItemDetail, openCompletionSnapshot, openCleaningSnapshot } from '../actions.js';
+import { itemRow, chev, openItemDetail, openCompletionSnapshot, openCleaningSnapshot, openAddToToday } from '../actions.js';
+import { toast } from '../ui.js';
 
 let view = null;      // {year, month}
 let selected = null;  // dateKey
@@ -44,6 +45,7 @@ export function render(root) {
   const daysInMonth = new Date(view.year, view.month + 1, 0).getDate();
   const daysInPrev = new Date(view.year, view.month, 0).getDate();
   const dots = store.monthDots(view.year, view.month);
+  const plannedDays = store.plannedDays(view.year, view.month);
   const todayKey = dateKey();
 
   const cell = (day, otherOffset = 0) => {
@@ -65,6 +67,7 @@ export function render(root) {
         dotWrap.append(el(`span.dot.${CATEGORIES[cat] ? CATEGORIES[cat].cls : 'c-home'}`));
       }
     }
+    if (!otherOffset && plannedDays.has(dk)) dotWrap.append(el('span.dot.planned'));
     btn.append(dotWrap);
     return btn;
   };
@@ -85,12 +88,49 @@ export function render(root) {
     : d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
   root.append(el('div.section-title', {}, label));
 
+  // planned things for this day (future or today) — removable, plannable
+  const planned = store.plannedOn(selected);
+  if (planned.length) {
+    const card = el('div.card', { style: { padding: '6px 12px' } });
+    for (const p of planned) {
+      let name, iconName = ICONS.cal, cat = 'health';
+      if (p.type === 'cleaning') {
+        const names = (p.roomIds || []).map((id) => store.state.rooms[id]?.name).filter(Boolean).join(', ');
+        name = `Home Cleaning${names ? ` — ${names}` : ''}`;
+        iconName = ICONS.broom; cat = 'home';
+      } else {
+        const ref = p.type === 'item' ? store.state.items[p.refId] : store.state.routines[p.refId];
+        if (!ref) continue;
+        name = ref.name; iconName = ref.icon; cat = ref.category;
+      }
+      card.append(itemRow({ name, icon: iconName }, {
+        category: cat,
+        sub: 'Planned',
+        trail: el('button.icon-btn', {
+          'aria-label': 'Remove plan',
+          onclick: () => { store.removePlanned(p.id); toast('Plan removed', null); },
+        }, [icon(ICONS.x, { size: 15 })]),
+      }));
+    }
+    root.append(card);
+    root.append(el('div.spacer'));
+  }
+
+  if (selected >= todayKey) {
+    root.append(el('button.btn.quiet.full', {
+      style: { marginBottom: '14px' },
+      onclick: () => openAddToToday(selected === todayKey ? {} : { date: selected }),
+    }, [icon(ICONS.plus, { size: 16 }), selected === todayKey ? 'Choose for today' : `Plan for ${planLabel(selected)}`]));
+  }
+
   const acts = store.activitiesOn(selected);
   if (!acts.length) {
-    root.append(el('div.card', {}, [el('div.empty', {}, [
-      el('span.hand', {}, 'A quiet day'),
-      'Nothing was logged — and that\u2019s perfectly fine.',
-    ])]));
+    if (!planned.length) {
+      root.append(el('div.card', {}, [el('div.empty', {}, [
+        el('span.hand', {}, 'A quiet day'),
+        'Nothing was logged — and that\u2019s perfectly fine.',
+      ])]));
+    }
     return;
   }
 

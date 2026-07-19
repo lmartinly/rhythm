@@ -144,6 +144,21 @@ export function relTime(ts) {
   return shortDate(dateKey(new Date(ts)));
 }
 
+export const addDays = (dk, n) => {
+  const d = keyToDate(dk);
+  d.setDate(d.getDate() + n);
+  return dateKey(d);
+};
+
+/** 'Today' / 'Tomorrow' / 'Sat, Jul 19' — for planned things. */
+export function planLabel(dk) {
+  const today = dateKey();
+  if (dk === today) return 'Today';
+  if (dk === addDays(today, 1)) return 'Tomorrow';
+  const d = keyToDate(dk);
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
 export function greeting() {
   const h = new Date().getHours();
   if (h < 5) return 'Hello, night owl';

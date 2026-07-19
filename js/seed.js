@@ -33,8 +33,8 @@ export function buildSeed() {
   // Beauty · skincare
   const cleanser = mkItem('Cleanser', 'droplets', 'beauty');
   const toner = mkItem('Toner', 'droplet', 'beauty');
-  const serum = mkItem('Serum', 'sparkles', 'beauty', 'Beauty of Joseon Glow Serum');
-  const treatment = mkItem('Treatment', 'moon-star', 'beauty', '', 'Retinol, azelaic acid — whatever the current active is.');
+  const serum = mkItem('Serum', 'sparkles', 'beauty');
+  const treatment = mkItem('Treatment', 'moon-star', 'beauty');
   const exfoliant = mkItem('Exfoliant', 'flower-2', 'beauty');
   const faceMask = mkItem('Face Mask', 'smile', 'beauty');
   const moisturizer = mkItem('Moisturizer', 'milk', 'beauty');

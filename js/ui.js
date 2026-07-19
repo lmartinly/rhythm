@@ -1,6 +1,6 @@
 // Rhythm · UI primitives (sheets, toasts, menus, form fields)
 
-import { el, icon, ICONS, CATEGORIES, ICON_CHOICES, WEEKDAYS } from './util.js';
+import { el, icon, ICONS, CATEGORIES, ICON_CHOICES, WEEKDAYS, dateKey, addDays } from './util.js';
 
 /* ── bottom sheet ── */
 
@@ -73,6 +73,42 @@ export function confirmSheet({ title, message, confirmLabel = 'Delete', danger =
         ]),
       ],
       onClose: () => { if (!answered) resolve(false); },
+    });
+  });
+}
+
+/* ── date sheet (native picker + a quick shortcut) ── */
+
+/** Resolves with a dateKey, or null if dismissed.
+    mode 'future' → planning ahead · mode 'past' → logging for another day. */
+export function openDateSheet({ title = 'Pick a day', mode = 'future' } = {}) {
+  return new Promise((resolve) => {
+    const today = dateKey();
+    const quickDk = mode === 'future' ? addDays(today, 1) : addDays(today, -1);
+    const input = el('input.input', { type: 'date' });
+    if (mode === 'future') { input.min = today; input.value = addDays(today, 1); }
+    else { input.max = today; input.value = today; }
+
+    let answered = false;
+    const finish = (dk) => { answered = true; resolve(dk); s.close(); };
+
+    const confirm = el('button.btn.full', { onclick: () => {
+      if (input.value) finish(input.value);
+    } }, 'Confirm');
+
+    const quickLabel = new Date(`${quickDk}T12:00:00`)
+      .toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+
+    const s = openSheet({
+      title,
+      body: [
+        el('button.btn.quiet.full', { onclick: () => finish(quickDk) },
+          `${mode === 'future' ? 'Tomorrow' : 'Yesterday'} · ${quickLabel}`),
+        el('div.spacer'),
+        el('div.field', {}, [el('label', {}, 'Or any day'), input]),
+      ],
+      foot: confirm,
+      onClose: () => { if (!answered) resolve(null); },
     });
   });
 }

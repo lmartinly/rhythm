@@ -5,7 +5,7 @@ import { buildSeed } from './seed.js';
 
 const KEY = 'rhythm.v1';
 
-const VERSION = 2;
+const VERSION = 3;
 
 /* v1 stored emoji icons; v2 uses Lucide names and adds product/notes/days. */
 const EMOJI_TO_ICON = {
@@ -51,6 +51,23 @@ function migrate(data) {
     }
     data.version = 2;
   }
+  if (data.version === 2) {
+    // planned-ahead entries land in v3
+    if (!Array.isArray(data.planned)) data.planned = [];
+    // v2 seeded example products as if they were the user's own — clear them
+    const EX_PRODUCT = 'Beauty of Joseon Glow Serum';
+    const EX_NOTES = 'Retinol, azelaic acid — whatever the current active is.';
+    for (const it of Object.values(data.items || {})) {
+      if (it.product === EX_PRODUCT) it.product = '';
+      if (it.notes === EX_NOTES) it.notes = '';
+    }
+    for (const c of data.completions || []) {
+      for (const s of c.itemStates || []) {
+        if (s.product === EX_PRODUCT) s.product = '';
+      }
+    }
+    data.version = 3;
+  }
   return data;
 }
 
@@ -66,6 +83,7 @@ function blankState() {
     completions: [],   // routine completion snapshots
     cleaning: [],      // cleaning session snapshots
     today: { dateKey: dateKey(), entries: [] },
+    planned: [],   // { id, dateKey, type: 'item'|'routine'|'cleaning', refId?, roomIds? }
     pinned: seed.pinned,
   };
 }
@@ -75,7 +93,7 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (!raw) return blankState();
     const data = JSON.parse(raw);
-    if (!data || (data.version !== 1 && data.version !== VERSION)) return blankState();
+    if (!data || ![1, 2, VERSION].includes(data.version)) return blankState();
     return migrate(data);
   } catch {
     return blankState();
@@ -101,10 +119,26 @@ export const store = {
 
   ensureToday() {
     const today = dateKey();
+    let dirty = false;
     if (this.state.today.dateKey !== today) {
       this.state.today = { dateKey: today, entries: [] };
-      this.save();
+      dirty = true;
     }
+    // planned things whose day has come move into Today — quietly, no overdue labels
+    const due = (this.state.planned || []).filter((p) => p.dateKey <= today);
+    if (due.length) {
+      for (const p of due) {
+        if (p.type === 'cleaning') {
+          this.state.today.entries.push({ id: uid(), type: 'cleaning', roomIds: p.roomIds || [], done: false });
+        } else {
+          const ref = p.type === 'item' ? this.state.items[p.refId] : this.state.routines[p.refId];
+          if (ref) this.state.today.entries.push({ id: uid(), type: p.type, refId: p.refId, done: false });
+        }
+      }
+      this.state.planned = this.state.planned.filter((p) => p.dateKey > today);
+      dirty = true;
+    }
+    if (dirty) this.save();
   },
 
   addToToday(type, refId) {
@@ -123,11 +157,71 @@ export const store = {
 
   /* ── logging items ── */
 
-  logItem(itemId, source = { type: 'quick' }) {
-    const log = { id: uid(), ts: Date.now(), dateKey: dateKey(), itemId, source };
+  logItem(itemId, source = { type: 'quick' }, dk = null) {
+    // dk lets you log for another day; the timestamp lands at midday
+    const ts = dk ? new Date(`${dk}T12:00:00`).getTime() : Date.now();
+    const log = { id: uid(), ts, dateKey: dk || dateKey(), itemId, source };
     this.state.logs.push(log);
     this.save();
     return log;
+  },
+
+  deleteLog(logId) {
+    this.state.logs = this.state.logs.filter((l) => l.id !== logId);
+    this.save();
+  },
+
+  deleteCompletion(completionId) {
+    this.state.completions = this.state.completions.filter((c) => c.id !== completionId);
+    this.state.logs = this.state.logs.filter((l) => l.source?.completionId !== completionId);
+    for (const e of this.state.today.entries) {
+      if (e.completionId === completionId) { e.done = false; delete e.completionId; }
+    }
+    this.save();
+  },
+
+  deleteCleaningSession(id) {
+    this.state.cleaning = this.state.cleaning.filter((c) => c.id !== id);
+    for (const e of this.state.today.entries) {
+      if (e.cleaningId === id) { e.done = false; delete e.cleaningId; }
+    }
+    this.save();
+  },
+
+  /* ── planning ahead ── */
+
+  addPlanned(dk, type, { refId = null, roomIds = null } = {}) {
+    const dup = (this.state.planned || []).some((p) =>
+      p.dateKey === dk && p.type === type && p.refId === refId);
+    if (dup && type !== 'cleaning') return null;
+    const p = { id: uid(), dateKey: dk, type, refId, roomIds };
+    this.state.planned.push(p);
+    this.save();
+    return p;
+  },
+
+  removePlanned(id) {
+    this.state.planned = this.state.planned.filter((p) => p.id !== id);
+    this.save();
+  },
+
+  plannedOn(dk) {
+    return (this.state.planned || []).filter((p) => p.dateKey === dk);
+  },
+
+  upcomingPlanned(limit = 3) {
+    return [...(this.state.planned || [])]
+      .sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+      .slice(0, limit);
+  },
+
+  plannedDays(year, month) {
+    const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const set = new Set();
+    for (const p of this.state.planned || []) {
+      if (p.dateKey.startsWith(prefix)) set.add(p.dateKey);
+    }
+    return set;
   },
 
   removeLog(logId) {
@@ -184,12 +278,16 @@ export const store = {
 
   /* ── cleaning sessions ── */
 
-  saveCleaningSession(roomsSnapshot) {
+  saveCleaningSession(roomsSnapshot, todayEntryId = null) {
     const session = {
       id: uid(), ts: Date.now(), dateKey: dateKey(),
       rooms: roomsSnapshot, // [{name, icon, tasks:[{name, done}]}]
     };
     this.state.cleaning.push(session);
+    if (todayEntryId) {
+      const entry = this.state.today.entries.find((e) => e.id === todayEntryId);
+      if (entry) { entry.done = true; entry.cleaningId = session.id; }
+    }
     this.save();
     return session;
   },
@@ -388,7 +486,7 @@ export const store = {
 
   importJSON(text) {
     const data = JSON.parse(text);
-    if (!data || (data.version !== 1 && data.version !== VERSION) || !data.items || !data.logs) {
+    if (!data || ![1, 2, VERSION].includes(data.version) || !data.items || !data.logs) {
       throw new Error('This file is not a Rhythm backup.');
     }
     this.state = migrate(data);

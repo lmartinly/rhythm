@@ -1,10 +1,10 @@
 // Rhythm · Dashboard — the front door to your own routines
 
-import { el, icon, ICONS, longDate, greeting, relTime, dayCode, dayShort } from '../util.js';
+import { el, icon, ICONS, longDate, greeting, relTime, dayCode, dayShort, planLabel } from '../util.js';
 import { store } from '../store.js';
 import { toast } from '../ui.js';
 import {
-  itemRow, chev, openAddToToday, openRoutineRun,
+  itemRow, chev, openAddToToday, openRoutineRun, startPlannedCleaning,
   openCompletionSnapshot, openCleaningSnapshot, startCleaningFlow, openItemDetail,
 } from '../actions.js';
 
@@ -39,11 +39,16 @@ export function render(root) {
   }
 
   for (const entry of entries) {
-    const ref = entry.type === 'item' ? s.items[entry.refId] : s.routines[entry.refId];
-    if (!ref) continue;
-    const sub = entry.type === 'routine'
-      ? `${ref.itemIds.length} item${ref.itemIds.length === 1 ? '' : 's'}`
-      : null;
+    let ref, sub = null;
+    if (entry.type === 'cleaning') {
+      const names = (entry.roomIds || []).map((id) => s.rooms[id]?.name).filter(Boolean);
+      ref = { name: 'Home Cleaning', icon: ICONS.broom, category: 'home' };
+      sub = names.length ? names.join(', ') : 'Pick rooms when you start';
+    } else {
+      ref = entry.type === 'item' ? s.items[entry.refId] : s.routines[entry.refId];
+      if (!ref) continue;
+      if (entry.type === 'routine') sub = `${ref.itemIds.length} item${ref.itemIds.length === 1 ? '' : 's'}`;
+    }
 
     const trail = [];
     if (entry.done) {
@@ -60,7 +65,13 @@ export function render(root) {
       sub,
       trail,
       onclick: () => {
-        if (entry.type === 'item') {
+        if (entry.type === 'cleaning') {
+          if (!entry.done) startPlannedCleaning(entry);
+          else if (entry.cleaningId) {
+            const c = s.cleaning.find((x) => x.id === entry.cleaningId);
+            if (c) openCleaningSnapshot(c);
+          }
+        } else if (entry.type === 'item') {
           store.toggleTodayItem(entry);
           if (entry.done) toast(`${ref.name} · done`);
         } else if (!entry.done) {
@@ -75,6 +86,31 @@ export function render(root) {
     todayCard.append(row);
   }
   root.append(todayCard);
+
+  const upcoming = store.upcomingPlanned(3);
+  if (upcoming.length) {
+    const up = el('div.upcoming');
+    for (const p of upcoming) {
+      let label;
+      if (p.type === 'cleaning') {
+        const names = (p.roomIds || []).map((id) => s.rooms[id]?.name).filter(Boolean).join(', ');
+        label = `Home Cleaning${names ? ` — ${names}` : ''}`;
+      } else {
+        const ref = p.type === 'item' ? s.items[p.refId] : s.routines[p.refId];
+        if (!ref) { store.removePlanned(p.id); continue; }
+        label = ref.name;
+      }
+      up.append(el('div.up-row', {}, [
+        el('span.up-when', {}, planLabel(p.dateKey)),
+        el('span.up-name', {}, label),
+        el('button.icon-btn', {
+          'aria-label': 'Remove plan',
+          onclick: () => { store.removePlanned(p.id); toast('Plan removed', null); },
+        }, [icon(ICONS.x, { size: 14 })]),
+      ]));
+    }
+    if (up.children.length) root.append(up);
+  }
 
   /* ── My Routines · scheduled-for-today first, then the daily ones ── */
 
